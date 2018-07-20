@@ -5,3 +5,13 @@
 **/.vs
 *.vcxproj.user
 *.vcxproj.filters
+/common/x64
+/inject/Debug
+/inject/x64
+/packages/wtl.9.1.1
+/ProcExec/Debug
+/ProcExec/x64
+/x64/Release/common.lib
+*.iobj
+*.pdb
+*.ipdb
