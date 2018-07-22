@@ -2,12 +2,13 @@
 #include "Injection.h"
 #include <Psapi.h>
 #include <stdint.h>
+#include "util.h"
 
 WCHAR injectDLL[4096] = {};
 static LPCWSTR INJECT_DLL = L"inject.dll";
 
 
-int InjectInProc(HANDLE hProc, HMODULE &hLibModule)
+int InjectInProc(HANDLE hProc, HMODULE &hLibModule, DWORD &dwTid)
 {
 
 	::GetModuleFileName(NULL, injectDLL, _countof(injectDLL));
@@ -51,6 +52,15 @@ int InjectInProc(HANDLE hProc, HMODULE &hLibModule)
 	hLibModule = GetModuleByName(hProc, INJECT_DLL);
 
 	::CloseHandle(hThread);
+
+	FILE *file = nullptr;
+	::fopen_s(&file, PE::pathToTidFile(), "r");
+	if (file)
+	{
+		fscanf_s(file, "%d", &dwTid);
+		::fclose(file);
+	}
+
 	::VirtualFreeEx(hProc, arg, memSize, MEM_RELEASE);
 	
 	return 0;

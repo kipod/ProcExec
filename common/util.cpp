@@ -18,6 +18,31 @@ CStringA Env(LPCSTR varName)
 	return buffer;
 }
 
+namespace {
+struct StdInputData {
+	StdInputData(const CString& lines, CHandle& hInputWrite)
+		: lines(lines)
+		, hInputWrite(hInputWrite)
+	{}
+	CString lines;
+	CHandle hInputWrite;
+};
+
+DWORD WINAPI StdInputWriterThreadProc(LPVOID pData)
+{
+	auto *p = reinterpret_cast<StdInputData *>(pData);
+	DWORD nWritten = 0;
+	CT2A tmp(p->lines.GetBuffer(p->lines.GetLength()));
+	LPCSTR buffer = tmp;
+	DWORD nSize = p->lines.GetLength();
+	::WriteFile(p->hInputWrite, buffer, nSize, &nWritten, NULL);
+	::WriteFile(p->hInputWrite, "\r\n", 2, &nWritten, NULL);
+	p->hInputWrite.Close();
+	delete p;
+	return 0;
+}
+}
+
 CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 {
 	CString result;
@@ -118,15 +143,17 @@ CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 
 		//////////////////////////////////////////////////////////////////////////
 		// Write input
-		std::async(std::launch::async, [&] {
-			DWORD nWritten = 0;
-			CT2A tmp(scriptLines.GetBuffer(scriptLines.GetLength()));
-			LPCSTR buffer = tmp;
-			DWORD nSize = scriptLines.GetLength();
-			::WriteFile(hInputWrite, buffer, nSize, &nWritten, NULL);
-			::WriteFile(hInputWrite, "\r\n", 2, &nWritten, NULL);
-			hInputWrite.Close();
-		});
+		auto* pData = new StdInputData(scriptLines, hInputWrite);
+		CHandle writeThread(::CreateThread(NULL, 0, StdInputWriterThreadProc, pData, 0, NULL));
+// 		std::async(std::launch::async, [&] {
+// 			DWORD nWritten = 0;
+// 			CT2A tmp(scriptLines.GetBuffer(scriptLines.GetLength()));
+// 			LPCSTR buffer = tmp;
+// 			DWORD nSize = scriptLines.GetLength();
+// 			::WriteFile(hInputWrite, buffer, nSize, &nWritten, NULL);
+// 			::WriteFile(hInputWrite, "\r\n", 2, &nWritten, NULL);
+// 			hInputWrite.Close();
+// 		});
 		//////////////////////////////////////////////////////////////////////////
 
 
@@ -226,5 +253,16 @@ CStringA pathToOutputFile()
 	}
 	return path;
 }
+
+CStringA pathToTidFile()
+{
+	static CStringA path;
+	if (path.IsEmpty())
+	{
+		path.Format("%s\\prosexec.tid", Env("LOCALAPPDATA"));
+	}
+	return path;
+}
+
 
 }
