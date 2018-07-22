@@ -5,7 +5,7 @@
 #include "util.h"
 
 WCHAR injectDLL[4096] = {};
-static LPCWSTR INJECT_DLL = L"inject.dll";
+LPCWSTR INJECT_DLL = L"inject.dll";
 
 
 int InjectInProc(HANDLE hProc, HMODULE &hLibModule, DWORD &dwTid)
@@ -107,4 +107,20 @@ HMODULE GetModuleByName(HANDLE hProc, LPCWSTR moduleName)
 		}
 	}
 	return hModule;
+}
+
+void ResExtract(WORD wResId, CString strOutputPath)
+{ //example: Extract(IDB_BITMAP1, "Redrose.bmp");
+	HRSRC hrsrc = ::FindResource(NULL, MAKEINTRESOURCE(wResId), RT_RCDATA);
+	if (hrsrc)
+	{
+		HGLOBAL hLoaded = LoadResource(NULL, hrsrc);
+		LPVOID lpLock = LockResource(hLoaded);
+		DWORD dwSize = SizeofResource(NULL, hrsrc);
+		CHandle hFile(::CreateFile(strOutputPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL));
+		DWORD dwByteWritten;
+		WriteFile(hFile, lpLock, dwSize, &dwByteWritten, NULL);
+		FreeResource(hLoaded);
+	}
+	
 }
