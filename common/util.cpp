@@ -3,8 +3,12 @@
 #include <stdlib.h>
 #include <future>
 #include <sstream>
+#include <tlhelp32.h>
+
 
 namespace PE {
+
+LPCWSTR INJECT_DLL = L"inject.dll";
 
 static const char TimeoutErrorMessage[] = "Error: Timeout";
 
@@ -264,5 +268,62 @@ CStringA pathToTidFile()
 	return path;
 }
 
+CString pathToInjectDll()
+{
+	static CString path;
+	if (path.IsEmpty())
+	{
+		WCHAR injectDLL[4096] = {};
+		::GetModuleFileName(NULL, injectDLL, _countof(injectDLL));
+		path = injectDLL;
+		path = path.MakeLower();
+		path.Replace(L"procexec.exe", INJECT_DLL);
+		path.ReleaseBuffer();
 
+	}
+	return path;
 }
+
+bool GetProcessByExeName(DWORD* Pid, LPCWSTR ExeName)
+{
+	HANDLE hProcessSnap = nullptr;
+	hProcessSnap = ::CreateToolhelp32Snapshot(TH32CS_SNAPALL, NULL);
+	if (hProcessSnap == INVALID_HANDLE_VALUE)
+	{
+		//::MessageBoxW(NULL, L"Cannot get Processes snapshot", L"Error", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+		*Pid = 0;
+		return false;
+	}
+
+	PROCESSENTRY32W pe32 = { 0 };
+	pe32.dwSize = sizeof(PROCESSENTRY32W);
+	CStringW temp = L"";
+
+	if (Process32FirstW(hProcessSnap, &pe32)) temp = pe32.szExeFile;
+	if (temp.MakeUpper().Find(ExeName) != -1)
+	{
+		*Pid = pe32.th32ProcessID;
+		::CloseHandle(hProcessSnap);
+		return true;
+	}
+	pe32.dwSize = sizeof(PROCESSENTRY32W);
+
+	while (::Process32NextW(hProcessSnap, &pe32))
+	{
+		temp = pe32.szExeFile;
+		if (temp.MakeUpper().Find(ExeName) != -1)
+		{
+			*Pid = pe32.th32ProcessID;
+			::CloseHandle(hProcessSnap);
+			return true;
+		}
+		pe32.dwSize = sizeof(PROCESSENTRY32W);
+	}
+
+	::CloseHandle(hProcessSnap);
+	*Pid = 0;
+	return false;
+}
+
+
+} // namespace PE

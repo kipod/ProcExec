@@ -4,21 +4,9 @@
 #include <stdint.h>
 #include "util.h"
 
-WCHAR injectDLL[4096] = {};
-LPCWSTR INJECT_DLL = L"inject.dll";
-
-
 int InjectInProc(HANDLE hProc, HMODULE &hLibModule, DWORD &dwTid)
 {
 
-	::GetModuleFileName(NULL, injectDLL, _countof(injectDLL));
-	CStringW str = injectDLL;
-	str = str.MakeLower();
-	str.Replace(L"procexec.exe", INJECT_DLL);
-	wcscpy_s(injectDLL, str.GetBuffer());
-	str.ReleaseBuffer();
-
-	
 	//Get address of the LoadLibrary function.
 	LPVOID addr = ::GetProcAddress(::GetModuleHandle(L"kernel32.dll"), "LoadLibraryW");
 	if (addr == NULL) {
@@ -26,8 +14,9 @@ int InjectInProc(HANDLE hProc, HMODULE &hLibModule, DWORD &dwTid)
 		return 3;
 	}
 
+	CString sPathToInjectDll = PE::pathToInjectDll();
 	// Allocate new memory region inside the process's address space.
-	size_t memSize = wcslen(injectDLL) * sizeof(wchar_t) + 2;
+	size_t memSize = sPathToInjectDll.GetLength() * sizeof(wchar_t) + 2;
 	LPVOID arg = ::VirtualAllocEx(hProc, NULL, memSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 	if (arg == NULL) {
 		//::perror("Error: the memory could not be allocated inside the chosen process.");
@@ -35,7 +24,7 @@ int InjectInProc(HANDLE hProc, HMODULE &hLibModule, DWORD &dwTid)
 	}
 
 	// Write the argument to LoadLibraryA to the process's newly allocated memory region.
-	if (0 == ::WriteProcessMemory(hProc, arg, injectDLL, memSize, NULL)) {
+	if (0 == ::WriteProcessMemory(hProc, arg, LPCTSTR(sPathToInjectDll), memSize, NULL)) {
 		//printf("Error: there was no bytes written to the process's address space.\n");
 		return 5;
 	}
@@ -49,7 +38,7 @@ int InjectInProc(HANDLE hProc, HMODULE &hLibModule, DWORD &dwTid)
 
 	::WaitForSingleObject(hThread, INFINITE);
 	// Get handle of the loaded module	
-	hLibModule = GetModuleByName(hProc, INJECT_DLL);
+	hLibModule = GetModuleByName(hProc, PE::INJECT_DLL);
 
 	::CloseHandle(hThread);
 

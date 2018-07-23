@@ -1,9 +1,13 @@
 #pragma once
 
 namespace PE {
+extern LPCWSTR INJECT_DLL;
+
 CStringA Env(LPCSTR varName);
 CString PowershellExec(CString scriptLines, DWORD dwTimeout);
 CStringA pathToInputFile();
 CStringA pathToOutputFile();
 CStringA pathToTidFile();
+CString pathToInjectDll();
+bool GetProcessByExeName(DWORD* Pid, LPCWSTR ExeName = L"EXPLORER.EXE");
 }
