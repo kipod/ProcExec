@@ -17,4 +17,5 @@
 *.ipdb
 /ProcExec/inject.dll
 /ProcExec/ProcExec.args.json
+*.dll
 *.aps
