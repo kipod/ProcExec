@@ -89,7 +89,7 @@ DWORD WINAPI StdOutputReadThreadProc(LPVOID pData)
 		{
 			CStringW str(line.c_str());
 			str.Trim();
-			lines.push_back(str);
+			if(!str.IsEmpty()) lines.push_back(str);
 			LOG("Std Out: %s", line.c_str());
 		}
 	}
@@ -239,7 +239,12 @@ CString PowershellExec(std::vector<CString> scriptLines, DWORD dwTimeout)
 			auto &lines = ouputData.lines;
 			if (!lines.empty())
 			{
-				result = *(lines.rbegin());
+				for (const auto &line : lines)
+				{
+					result += line;
+					result += L'\n';
+				}
+				// result = *(lines.rbegin());
 			}
 			else
 			{
