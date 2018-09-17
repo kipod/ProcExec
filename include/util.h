@@ -4,7 +4,7 @@ namespace PE {
 extern LPCWSTR INJECT_DLL;
 
 CStringA Env(LPCSTR varName);
-CString PowershellExec(CString scriptLines, DWORD dwTimeout=INFINITE);
+CString PowershellExec(std::vector<CString> scriptLines, DWORD dwTimeout=INFINITE);
 CStringA pathToInputFile();
 CStringA pathToOutputFile();
 CStringA pathToTidFile();

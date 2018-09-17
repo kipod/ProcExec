@@ -4,7 +4,7 @@
 #include <future>
 #include <sstream>
 #include <tlhelp32.h>
-
+#include <logging.h>
 
 namespace PE {
 
@@ -23,35 +23,87 @@ CStringA Env(LPCSTR varName)
 }
 
 namespace {
-struct StdInputData {
-	StdInputData(const CString& lines, CHandle& hInputWrite)
-		: lines(lines)
-		, hInputWrite(hInputWrite)
-	{}
-	CString lines;
-	CHandle hInputWrite;
+
+struct StdStreamData {
+	StdStreamData(HANDLE hStream)
+		: hStream(hStream) {}
+	CHandle hStream;
+	std::vector<CString> lines;
 };
 
-DWORD WINAPI StdInputWriterThreadProc(LPVOID pData)
+//************************************
+// Function:  StdInputWriteThreadProc
+// FullName:  PE::StdInputWriteThreadProc
+// Returns:   DWORD
+// Qualifier: writes lines into standard input stream of controlled process
+// Parameter: LPVOID pData
+//************************************
+DWORD WINAPI StdInputWriteThreadProc(LPVOID pData)
 {
-	auto *p = reinterpret_cast<StdInputData *>(pData);
-	DWORD nWritten = 0;
-	CT2A tmp(p->lines.GetBuffer(p->lines.GetLength()));
-	LPCSTR buffer = tmp;
-	DWORD nSize = p->lines.GetLength();
-	::WriteFile(p->hInputWrite, buffer, nSize, &nWritten, NULL);
-	::WriteFile(p->hInputWrite, "\r\n", 2, &nWritten, NULL);
-	p->hInputWrite.Close();
-	delete p;
+	LOG("StdInputWriteThreadProc: started");
+	auto *p = reinterpret_cast<StdStreamData *>(pData);
+	auto &lines = p->lines;
+	HANDLE hFile = p->hStream;
+	for (auto& line : lines)
+	{
+		DWORD nWritten = 0;
+		DWORD nSize = line.GetLength();
+		CT2A tmp(line.GetBuffer(nSize));
+		LPCSTR buffer = tmp;
+		::WriteFile(hFile, buffer, nSize, &nWritten, nullptr);
+		::WriteFile(hFile, "\r\n", 2, &nWritten, nullptr);
+		LOG("StdInputWriteThreadProc: write: '%s'", line);
+	}
+	p->hStream.Close();
+	LOG("StdInputWriteThreadProc: finished");
 	return 0;
 }
+
+//************************************
+// Function:  StdOutputReadThreadProc
+// FullName:  PE::StdOutputReadThreadProc
+// Returns:   DWORD
+// Qualifier: read lines from standard output of the controlled process and writes them into string buffer
+// Parameter: LPVOID pData
+//************************************
+DWORD WINAPI StdOutputReadThreadProc(LPVOID pData)
+{
+	LOG("StdOutputReadThreadProc started");
+	auto *p = reinterpret_cast<StdStreamData *>(pData);
+
+	const size_t BUF_SIZE = 8192;
+	CHAR lpBuffer[BUF_SIZE] = { 0 };
+	DWORD nBytesRead = 0;
+
+	auto &lines = p->lines;
+	HANDLE hFile = p->hStream;
+	while(FALSE != ::ReadFile(hFile, lpBuffer, BUF_SIZE,
+		&nBytesRead, nullptr))
+	{
+		WCHAR wcpBuffer[BUF_SIZE] = { 0 };
+		::MultiByteToWideChar(CP_OEMCP, 0, lpBuffer, nBytesRead, wcpBuffer, nBytesRead);
+		std::wstring sBuffer(wcpBuffer);
+		std::wstringstream ss(sBuffer);
+		std::wstring line;
+		while (std::getline(ss, line))
+		{
+			CStringW str(line.c_str());
+			str.Trim();
+			lines.push_back(str);
+			LOG("Std Out: %s", line.c_str());
+		}
+	}
+
+	LOG("StdOutputReadThreadProc finished");
+	return 0;
 }
 
-CString PowershellExec(CString scriptLines, DWORD dwTimeout)
+} // namespace
+
+CString PowershellExec(std::vector<CString> scriptLines, DWORD dwTimeout)
 {
 	CString result;
 
-	//CString command = TEXT("powershell -Version 2.0 -Command -");
 	CString command = TEXT("powershell -Command -");
 
 	//////////////////////////////////////////////////////////////////////////
@@ -60,13 +112,14 @@ CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 	CHandle hOutputReadTmp, hOutputRead, hOutputWrite;
 	CHandle hInputWriteTmp, hInputRead, hInputWrite;
 	CHandle hErrorWrite;
-	SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES),  NULL, TRUE };
+	SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES),  nullptr, TRUE };
 
 	DWORD dwPipeSize = 0;
 
 	// Create the child output pipe.
 	if (FALSE == ::CreatePipe(&hOutputReadTmp.m_h, &hOutputWrite.m_h, &sa, dwPipeSize))
 	{
+		LOG("ERROR: Can't create output pipe");
 		return "Error: Can't create pipe";
 	}
 
@@ -77,34 +130,38 @@ CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 		GetCurrentProcess(), &hErrorWrite.m_h, 0,
 		TRUE, DUPLICATE_SAME_ACCESS))
 	{
+		LOG("ERROR: Cannot duplicate handle for output pipe");
 		return "Error: Can't DuplicateHandle";
 	}
 
 	// Create the child input pipe.
 	if (FALSE == ::CreatePipe(&hInputRead.m_h, &hInputWriteTmp.m_h, &sa, dwPipeSize))
 	{
+		LOG("ERROR: Can't create input pipe");
 		return "Error: Can't create pipe";
 	}
 
 	// Create new output read handle and the input write handles. Set
 	// the Properties to FALSE. Otherwise, the child inherits the
-	// properties and, as a result, non-closeable handles to the pipes
+	// properties and, as a result, non-close able handles to the pipes
 	// are created.
 	if (FALSE == ::DuplicateHandle(GetCurrentProcess(), hOutputReadTmp,
 		GetCurrentProcess(),
 		&hOutputRead.m_h, // Address of new handle.
-		0, FALSE, // Make it uninheritable.
+		0, FALSE, // Make it non-inheritable.
 		DUPLICATE_SAME_ACCESS))
 	{
+		LOG("ERROR: Can't create input pipe");
 		return "Error: Can't DuplicateHandle";
 	}
 
 	if (FALSE == ::DuplicateHandle(GetCurrentProcess(), hInputWriteTmp,
 		GetCurrentProcess(),
 		&hInputWrite.m_h, // Address of new handle.
-		0, FALSE, // Make it uninheritable.
+		0, FALSE, // Make it non-inheritable.
 		DUPLICATE_SAME_ACCESS))
 	{
+		LOG("ERROR: Cannot duplicate handle for input pipe");
 		return "Error: Can't DuplicateHandle";
 	}
 
@@ -129,15 +186,16 @@ CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 	si.hStdOutput = hOutputWrite;
 	si.hStdError = hErrorWrite;
 
-	if (FALSE != ::CreateProcessAsUser(NULL,
-		NULL,
+	LOG("INFO: Start process: %s", command);
+	if (FALSE != ::CreateProcessAsUser(nullptr,
+		nullptr,
 		command.GetBuffer(command.GetLength() + 1),
-		NULL,
-		NULL,
+		nullptr,
+		nullptr,
 		TRUE,
 		NORMAL_PRIORITY_CLASS,
-		NULL,
-		NULL,
+		nullptr,
+		nullptr,
 		&si,
 		&pi
 	))
@@ -147,85 +205,48 @@ CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 
 		//////////////////////////////////////////////////////////////////////////
 		// Write input
-		auto* pData = new StdInputData(scriptLines, hInputWrite);
-		CHandle writeThread(::CreateThread(NULL, 0, StdInputWriterThreadProc, pData, 0, NULL));
-// 		std::async(std::launch::async, [&] {
-// 			DWORD nWritten = 0;
-// 			CT2A tmp(scriptLines.GetBuffer(scriptLines.GetLength()));
-// 			LPCSTR buffer = tmp;
-// 			DWORD nSize = scriptLines.GetLength();
-// 			::WriteFile(hInputWrite, buffer, nSize, &nWritten, NULL);
-// 			::WriteFile(hInputWrite, "\r\n", 2, &nWritten, NULL);
-// 			hInputWrite.Close();
-// 		});
+		StdStreamData inputData(hInputWrite.Detach());
+		inputData.lines = scriptLines;
+		CHandle writeThread(::CreateThread(nullptr, 0, StdInputWriteThreadProc, &inputData, 0, nullptr));
 		//////////////////////////////////////////////////////////////////////////
 
+		//////////////////////////////////////////////////////////////////////////
+		// Read output
+		StdStreamData ouputData(hOutputRead.Detach());
+		CHandle readThread(::CreateThread(nullptr, 0, StdOutputReadThreadProc, &ouputData, 0, nullptr));
+		::SetThreadPriority(readThread, THREAD_PRIORITY_HIGHEST);
+		//////////////////////////////////////////////////////////////////////////
+
+		//////////////////////////////////////////////////////////////////////////
+// 		DWORD nNumberOfBytesWritten = 0;
+// 		::WriteFile(hOutputWrite, "\n", 1, &nNumberOfBytesWritten, nullptr);
+		//////////////////////////////////////////////////////////////////////////
+
+		::WaitForSingleObject(writeThread, INFINITE);
 
 		bool timeout = (WAIT_TIMEOUT == ::WaitForSingleObject(hProcess, dwTimeout));
 		if (!timeout)
 		{
-			//////////////////////////////////////////////////////////////////////////
-			// Read Output
-			//LOG_MESSAGE(TME_VERBOSE, "Read script output");
-			CHAR lpBuffer[8192] = { 0 };
-			DWORD nBytesRead = 0;
-
-			std::vector<CString> lines;
-
-			//CHandle hReadDoneEvent(::CreateEvent(NULL, TRUE, FALSE, NULL));
-			DWORD nNumberOfBytesWritten = 0;
-			::WriteFile(hOutputWrite, "\n", 1, &nNumberOfBytesWritten, NULL);
-			/////////////////////////////////////////////////////////////////////////
-			// Wait Timeout
-// 			std::thread wait_timeout_thread([&hReadDoneEvent, &hOutputWrite, &dwTimeout] {
-// 				if (WAIT_TIMEOUT == ::WaitForSingleObject(hReadDoneEvent, dwTimeout))
-// 				{
-// 					::SetLastError(ERROR_TIMEOUT);
-// 					static const DWORD nNumberOfBytesToWrite = sizeof(TimeoutErrorMessage);
-// 					DWORD nNumberOfBytesWritten = 0;
-// 					::WriteFile(hOutputWrite, TimeoutErrorMessage, nNumberOfBytesToWrite, &nNumberOfBytesWritten, NULL);
-// 					hOutputWrite.Close();
-// 				}
-// 			});
-			//wait_timeout_thread.detach();
-			//////////////////////////////////////////////////////////////////////////
-
-			if (FALSE == ::ReadFile(hOutputRead, lpBuffer, _countof(lpBuffer),
-				&nBytesRead, NULL) || !nBytesRead)
-			{
-				//LOG_MESSAGE(TME_ERROR, "Can't read output");
-				return "Error: Can't read output";
-			}
-			//::SetEvent(hReadDoneEvent);
-
-			//wait_timeout_thread.join();
-			//hReadDoneEvent.Close();
-
-			WCHAR wcpBuffer[_countof(lpBuffer)] = { 0 };
-			::MultiByteToWideChar(CP_OEMCP, 0, lpBuffer, nBytesRead, wcpBuffer, nBytesRead);
-			//CString s(wcpBuffer);
-			std::wstring sBuffer(wcpBuffer);
-			std::wstringstream ss(sBuffer);
-			std::wstring line;
-			while (std::getline(ss, line))
-			{
- 				CStringW str(line.c_str());
-				str.Trim();
-				if (!line.empty()) lines.push_back(str);
-				//LOG_MESSAGE(TME_VERBOSE, "%S", line.c_str());
-#ifdef _DEBUG
-				::OutputDebugStringW(line.c_str());
-				::OutputDebugStringW(L"\n");
-#endif
-			}
-
+			LOG("INFO: PowershellExec: Process finished");
+ 			hProcess.Close();
+ 			::FlushFileBuffers(hOutputWrite);
+// 			hOutputWrite.Close();
+// 			::CancelIo(ouputData.hStream);
+// 			::CloseHandle(ouputData.hStream);
+			CancelSynchronousIo(readThread);
+			LOG("INFO: Wait for reading thread");
+			::WaitForSingleObject(readThread, INFINITE);
+			auto &lines = ouputData.lines;
 			if (!lines.empty())
 			{
 				result = *(lines.rbegin());
 			}
 			else
 			{
-				//LOG_MESSAGE(TME_ERROR, "Output is empty!");
+#ifdef _DEBUG
+				::OutputDebugStringW(L"Output is empty!");
+				::OutputDebugStringW(L"\n");
+#endif
 			}
 			//////////////////////////////////////////////////////////////////////////
 		}
@@ -233,6 +254,8 @@ CString PowershellExec(CString scriptLines, DWORD dwTimeout)
 		{
 			result = TimeoutErrorMessage;
 		}
+
+		::WaitForSingleObject(readThread, INFINITE);
 	}
 
 	return result;
@@ -273,8 +296,9 @@ CString pathToInjectDll()
 	static CString path;
 	if (path.IsEmpty())
 	{
-		WCHAR injectDLL[4096] = {};
-		::GetModuleFileName(NULL, injectDLL, _countof(injectDLL));
+		const size_t PAGE_SIZE = 4096;
+		WCHAR injectDLL[PAGE_SIZE] = {};
+		::GetModuleFileName(nullptr, injectDLL, PAGE_SIZE);
 		path = injectDLL;
 		path = path.MakeLower();
 		path.Replace(L"procexec.exe", INJECT_DLL);
@@ -287,10 +311,10 @@ CString pathToInjectDll()
 bool GetProcessByExeName(DWORD* Pid, LPCWSTR ExeName)
 {
 	HANDLE hProcessSnap = nullptr;
-	hProcessSnap = ::CreateToolhelp32Snapshot(TH32CS_SNAPALL, NULL);
+	hProcessSnap = ::CreateToolhelp32Snapshot(TH32CS_SNAPALL, 0);
 	if (hProcessSnap == INVALID_HANDLE_VALUE)
 	{
-		//::MessageBoxW(NULL, L"Cannot get Processes snapshot", L"Error", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+		//::MessageBoxW(nullptr, L"Cannot get Processes snapshot", L"Error", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
 		*Pid = 0;
 		return false;
 	}
